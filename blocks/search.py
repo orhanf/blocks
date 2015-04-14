@@ -53,8 +53,9 @@ class BeamSearch(object):
     to work).
 
     """
-    def __init__(self, beam_size, samples):
+    def __init__(self, beam_size, samples, init_state_fn):
         self.beam_size = beam_size
+        self.init_state_fn = init_state_fn
 
         # Extracting information from the sampling computation graph
         cg = ComputationGraph(samples)
@@ -169,6 +170,7 @@ class BeamSearch(object):
 
         """
         init_states = self.initial_state_computer(*list(contexts.values()))
+        init_states[0] = self.init_state_fn(contexts['attended'])
         return OrderedDict(equizip(self.state_names, init_states))
 
     def compute_logprobs(self, contexts, states):
