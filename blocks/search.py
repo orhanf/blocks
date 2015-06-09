@@ -53,8 +53,7 @@ class BeamSearch(object):
     to work).
 
     """
-    def __init__(self, prev_word, beam_size, samples):
-        self.prev_word = prev_word
+    def __init__(self, beam_size, samples):
         self.beam_size = beam_size
 
         # Extracting information from the sampling computation graph
@@ -126,7 +125,7 @@ class BeamSearch(object):
             roles=[OUTPUT])(self.inner_cg)[0]
         logprobs = -tensor.log(probs)
         self.logprobs_computer = function(
-            self.contexts + self.input_states + [self.prev_word], logprobs,
+            self.contexts + self.input_states, logprobs,
             on_unused_input='ignore')
 
     def compile(self):
@@ -172,7 +171,7 @@ class BeamSearch(object):
         init_states = self.initial_state_computer(*list(contexts.values()))
         return OrderedDict(equizip(self.state_names, init_states))
 
-    def compute_logprobs(self, contexts, states, outputs):
+    def compute_logprobs(self, contexts, states):
         """Compute log probabilities of all possible outputs.
 
         Parameters
@@ -190,7 +189,7 @@ class BeamSearch(object):
         """
         input_states = [states[name] for name in self.input_state_names]
         return self.logprobs_computer(*(list(contexts.values()) +
-                                      input_states + [outputs.reshape(-1, 1)]))
+                                      input_states))
 
     def compute_next_states(self, contexts, states, outputs):
         """Computes next states.
@@ -298,7 +297,7 @@ class BeamSearch(object):
 
             # We carefully hack values of the `logprobs` array to ensure
             # that all finished sequences are continued with `eos_symbol`.
-            logprobs = self.compute_logprobs(contexts, states, all_outputs[-1])
+            logprobs = self.compute_logprobs(contexts, states)
             next_costs = (all_costs[-1, :, None] +
                           logprobs * all_masks[-1, :, None])
             (finished,) = numpy.where(all_masks[-1] == 0)
