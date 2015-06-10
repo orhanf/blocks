@@ -94,7 +94,7 @@ class BeamSearch(object):
 
     def _compile_context_computer(self):
         self.context_computer = function(
-            self.inputs, self.contexts, on_unused_input='ignore')
+            self.inputs, self.contexts, on_unused_input='warn')
 
     def _compile_initial_state_computer(self):
         initial_states = [
@@ -103,7 +103,7 @@ class BeamSearch(object):
                 **dict(equizip(self.context_names, self.contexts)))
             for name in self.state_names]
         self.initial_state_computer = function(
-            self.contexts, initial_states, on_unused_input='ignore')
+            self.contexts, initial_states, on_unused_input='warn')
 
     def _compile_next_state_computer(self):
         next_states = [VariableFilter(bricks=[self.generator],
@@ -126,7 +126,16 @@ class BeamSearch(object):
         logprobs = -tensor.log(probs)
         self.logprobs_computer = function(
             self.contexts + self.input_states, logprobs,
-            on_unused_input='ignore')
+            on_unused_input='warn')
+
+    def _compile_glimpse_getter(self):
+        outs = VariableFilter(
+            applications=[self.generator.transition.take_glimpses],
+            roles=[OUTPUT])(self.inner_cg)
+        inps = VariableFilter(
+            applications=[self.generator.transition.take_glimpses],
+            roles=[INPUT])(self.inner_cg)
+        self.take_current_glimpses = function(inps, outs)
 
     def compile(self):
         """Compile all Theano functions used."""
@@ -134,6 +143,7 @@ class BeamSearch(object):
         self._compile_initial_state_computer()
         self._compile_next_state_computer()
         self._compile_logprobs_computer()
+        self._compile_glimpse_getter()
         self.compiled = True
 
     def compute_contexts(self, inputs):
@@ -309,6 +319,14 @@ class BeamSearch(object):
             (indexes, outputs), chosen_costs = self._smallest(
                 next_costs, self.beam_size, only_first_row=i == 0)
 
+            # Get glimpses and update states first
+            '''
+            curr_weights, curr_weighted_avgs = self.take_current_glimpses(
+                states['states'], contexts['attended_mask'],
+                contexts['attended'])
+            states['weights'] = curr_weights
+            states['weighted_averages'] = curr_weighted_avgs
+            '''
             # Rearrange everything
             for name in states:
                 states[name] = states[name][indexes]
