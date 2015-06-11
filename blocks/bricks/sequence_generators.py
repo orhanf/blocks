@@ -686,7 +686,7 @@ class SoftmaxEmitter(AbstractEmitter, Initializable, Random):
         num_outputs = flat_outputs.shape[0]
         return -tensor.log(
             probs.flatten()[max_output * tensor.arange(num_outputs) +
-                            flat_outputs].reshape(outputs.shape))
+                            flat_outputs].reshape(outputs.shape) + 1e-6)
 
     @application
     def initial_outputs(self, batch_size):
