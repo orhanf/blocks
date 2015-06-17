@@ -7,6 +7,7 @@ from six.moves import reduce
 
 from picklable_itertools.extras import equizip
 
+import numpy
 import theano
 from six import add_metaclass
 from theano import tensor
@@ -768,3 +769,373 @@ class Restrict(StepRule):
                              else (param, previous_steps[param])
                              for param in previous_steps)
         return actual, updates
+
+
+class Adasecant(StepRule):
+    """
+    Adasecant:
+        Based on the paper:
+            Gulcehre, Caglar, and Yoshua Bengio.
+            "ADASECANT: Robust Adaptive Secant Method for Stochastic Gradient."
+            arXiv preprint arXiv:1412.7419 (2014).
+    There are some small changes in this code.
+    Parameters
+    ----------
+
+    gamma_clip : float, optional
+        The clipping threshold for the gamma. In general 1.8 seems to
+        work fine for several tasks.
+    decay : float, optional
+        Decay rate :math:`\\rho` in Algorithm 1 of the aforementioned
+        paper. Decay 0.95 seems to work fine for several tasks.
+    start_var_reduction: float, optional,
+        How many updates later should the variance reduction start from?
+    delta_clip: float, optional,
+        The threshold to clip the deltas after.
+    grad_clip: float, optional,
+        Apply gradient clipping for RNNs (not necessary for feedforward
+        networks). But this is a constraint on the norm of the gradient per
+        layer.
+        Based on:
+            Pascanu, Razvan, Tomas Mikolov, and Yoshua Bengio. "On the
+            difficulty of training recurrent neural networks." arXiv preprint
+            arXiv:1211.5063 (2012).
+    use_adagrad: bool, optional
+        Either to use clipped adagrad or not.
+    use_corrected_grad: bool, optional
+        Either to use correction for gradients (referred as variance
+        reduction in the workshop paper).
+    """
+    def __init__(self, decay=0.95,
+                 gamma_clip=0.0,
+                 grad_clip=None,
+                 start_var_reduction=0,
+                 delta_clip=None,
+                 use_adagrad=False,
+                 skip_nan_inf=False,
+                 use_corrected_grad=True):
+
+        assert decay >= 0.
+        assert decay < 1.
+
+        self.start_var_reduction = start_var_reduction
+        self.delta_clip = delta_clip
+        self.gamma_clip = gamma_clip
+        self.grad_clip = grad_clip
+        self.decay = shared_floatx(decay, "decay")
+        self.use_corrected_grad = use_corrected_grad
+        self.use_adagrad = use_adagrad
+        self.damping = 1e-7
+
+        # We have to bound the tau to prevent it to
+        # grow to an arbitrarily large number, oftenwise
+        # that causes numerical instabilities for very deep
+        # networks. Note that once tau become very large, it will keep,
+        # increasing indefinitely.
+        self.skip_nan_inf = skip_nan_inf
+        self.upper_bound_tau = 1e7
+        self.lower_bound_tau = 1.5
+
+    def compute_step(self, param, previous_step):
+
+        grad = previous_step
+
+        updates = OrderedDict({})
+        eps = self.damping
+        step = shared_floatx(0., name="step")
+
+        if self.skip_nan_inf:
+            # If norm of the gradients of a parameter is inf or nan don't
+            # update that parameter
+            # That might be useful for RNNs.
+            grad = tensor.switch(
+                tensor.or_(tensor.isinf(grad), tensor.isnan(grad)), 0, grad)
+
+        # Block-normalize gradients:
+        # TODO: this is removed
+
+        # Apply the gradient clipping, this is only sometimes
+        # necessary for RNNs and sometimes for very deep networks
+        if self.grad_clip:
+            assert self.grad_clip > 0.
+            assert self.grad_clip <= 1.,\
+                "Norm of the gradients per layer can not be larger than 1."
+
+            gnorm = grad.norm(2)
+            notfinite = tensor.or_(tensor.isnan(gnorm), tensor.isinf(gnorm))
+            tmpg = tensor.switch(
+                gnorm > self.grad_clip, grad * self.grad_clip / gnorm, grad)
+            grad = tensor.switch(notfinite, 0.1 * param, tmpg)
+
+        tot_norm_up = 0
+        tot_param_norm = 0
+
+        fix_decay_eg = (self.decay)**(step + 1)
+        fix_decay = (0.995)**(step + 1)
+
+        grad.name = "grad_%s" % param.name
+        mean_grad = shared_floatx(
+            param.get_value() * 0. + eps, name="mean_grad_%s" % param.name)
+
+        # TODO:mean_corrected_grad is never used
+        mean_corrected_grad = shared_floatx(
+            param.get_value() * 0 + eps,
+            name="mean_corrected_grad_%s" % param.name)
+        gnorm_sqr = shared_floatx(0.0 + eps, name="gnorm_%s" % param.name)
+
+        slow_constant = 2.1
+
+        if self.use_adagrad:
+            # sum_square_grad := \sum_i g_i^2
+            sum_square_grad = shared_floatx(
+                param.get_value(borrow=True) * 0.,
+                name="sum_square_grad_%s" % param.name)
+
+        """
+           Initialization of accumulators
+        """
+        taus_x_t = shared_floatx(
+            (numpy.ones_like(param.get_value()) + eps) * slow_constant,
+            name="taus_x_t_" + param.name)
+        self.taus_x_t = taus_x_t
+
+        # Variance reduction parameters
+        # Numerator of the gamma:
+        gamma_nume_sqr = shared_floatx(
+            numpy.zeros_like(param.get_value()) + eps,
+            name="gamma_nume_sqr_" + param.name)
+
+        # Denominator of the gamma:
+        gamma_deno_sqr = shared_floatx(
+            numpy.zeros_like(param.get_value()) + eps,
+            name="gamma_deno_sqr_" + param.name)
+
+        # For the covariance parameter := E[\gamma \alpha]_{t-1}
+        cov_num_t = shared_floatx(numpy.zeros_like(param.get_value()) + eps,
+                                  name="cov_num_t_" + param.name)
+
+        # mean_squared_grad := E[g^2]_{t-1}
+        mean_square_grad = shared_floatx(
+            numpy.zeros_like(param.get_value()) + eps,
+            name="msg_" + param.name)
+
+        # mean_square_dx := E[(\Delta x)^2]_{t-1}
+        mean_square_dx = shared_floatx(
+            param.get_value() * 0., name="msd_" + param.name)
+
+        if self.use_corrected_grad:
+            old_grad = shared_floatx(param.get_value() * 0. + eps)
+
+        # The uncorrected gradient of previous of the previous update:
+        old_plain_grad = shared_floatx(param.get_value() * 0. + eps)
+        mean_curvature = shared_floatx(param.get_value() * 0. + eps)
+        mean_curvature_sqr = shared_floatx(param.get_value() * 0. + eps)
+
+        # Initialize the E[\Delta]_{t-1}
+        mean_dx = shared_floatx(param.get_value() * 0.)
+
+        # Block-wise normalize the gradient:
+        # TODO: again block-wise normalization is removed here, but why we set
+        # norm_grad to grad where is the norm?
+        # TODO: double check this part
+        # norm_grad = grads[param]
+        norm_grad = grad
+
+        # For the first time-step, assume that delta_x_t := norm_grad
+        gnorm = tensor.sqr(norm_grad).sum()
+
+        cond = tensor.eq(step, 0)
+        gnorm_sqr_o = cond * gnorm + (1 - cond) * gnorm_sqr
+        gnorm_sqr_b = gnorm_sqr_o / (1 - fix_decay)
+
+        norm_grad = norm_grad / (tensor.sqrt(gnorm_sqr_b) + eps)
+        msdx = cond * norm_grad**2 + (1 - cond) * mean_square_dx
+        mdx = cond * norm_grad + (1 - cond) * mean_dx
+
+        """
+            Compute the new updated values.
+        """
+        # E[g_i^2]_t
+        new_mean_squared_grad = (
+            mean_square_grad * (self.decay) +
+            tensor.sqr(norm_grad) * (1 - self.decay)
+        )
+        new_mean_squared_grad.name = "msg_" + param.name
+
+        # E[g_i]_t
+        new_mean_grad = (
+            mean_grad * (self.decay) +
+            norm_grad * (1 - self.decay)
+        )
+        new_mean_grad.name = "nmg_" + param.name
+        mg = new_mean_grad / (1 - fix_decay_eg)
+        mgsq = new_mean_squared_grad / (1 - fix_decay_eg)
+
+        new_gnorm_sqr = (
+                gnorm_sqr_o * 0.995 +
+                tensor.sqr(norm_grad).sum() * (0.005)
+        )
+
+        # Keep the rms for numerator and denominator of gamma.
+        new_gamma_nume_sqr = (
+            gamma_nume_sqr * (1 - 1 / taus_x_t) +
+            tensor.sqr((norm_grad - old_grad) * (old_grad - mg)) / taus_x_t
+        )
+        new_gamma_nume_sqr.name = "ngammasqr_num_" + param.name
+
+        new_gamma_deno_sqr = (
+            gamma_deno_sqr * (1 - 1 / taus_x_t) +
+            tensor.sqr((mg - norm_grad) * (old_grad - mg)) / taus_x_t
+        )
+        new_gamma_deno_sqr.name = "ngammasqr_den_" + param.name
+
+        gamma = tensor.sqrt(gamma_nume_sqr) / \
+            (tensor.sqrt(gamma_deno_sqr + eps) + 1e-6)
+        gamma.name = "gamma_" + param.name
+
+        if self.gamma_clip and self.gamma_clip > -1:
+            gamma = tensor.minimum(gamma, self.gamma_clip)
+
+        momentum_step = gamma * mg
+        corrected_grad_cand = (norm_grad + momentum_step) / (1 + gamma)
+
+        # For starting the variance reduction.
+        if self.start_var_reduction > -1:
+            cond = tensor.le(self.start_var_reduction, step)
+            corrected_grad = cond * corrected_grad_cand + \
+                (1 - cond) * norm_grad
+        else:
+            corrected_grad = norm_grad
+
+        if self.use_adagrad:
+            g = corrected_grad
+            # Accumulate gradient
+            new_sum_squared_grad = (
+                sum_square_grad + tensor.sqr(g)
+            )
+            rms_g_t = tensor.sqrt(new_sum_squared_grad)
+            rms_g_t = tensor.maximum(rms_g_t, 1.0)
+
+        # Use the gradients from the previous update
+        # to compute the \nabla f(x_t) - \nabla f(x_{t-1})
+        cur_curvature = norm_grad - old_plain_grad
+        # cur_curvature = theano.printing.Print("Curvature: ")(cur_curvature)
+        cur_curvature_sqr = tensor.sqr(cur_curvature)
+
+        new_curvature_ave = (
+            mean_curvature * (1 - 1 / taus_x_t) +
+            (cur_curvature / taus_x_t)
+        )
+        new_curvature_ave.name = "ncurve_ave_" + param.name
+
+        # Average average curvature
+        nc_ave = new_curvature_ave
+
+        new_curvature_sqr_ave = (
+            mean_curvature_sqr * (1 - 1 / taus_x_t) +
+            (cur_curvature_sqr / taus_x_t)
+        )
+        new_curvature_sqr_ave.name = "ncurve_sqr_ave_" + param.name
+
+        # Unbiased average squared curvature
+        nc_sq_ave = new_curvature_sqr_ave
+
+        epsilon = 1e-7
+        # lr_scalers.get(param, 1.) * learning_rate
+        scaled_lr = shared_floatx(1.0)
+        rms_dx_tm1 = tensor.sqrt(msdx + epsilon)
+
+        rms_curve_t = tensor.sqrt(new_curvature_sqr_ave + epsilon)
+
+        # This is where the update step is being defined
+        delta_x_t = -scaled_lr * \
+            (rms_dx_tm1 / rms_curve_t -
+             cov_num_t / (new_curvature_sqr_ave + epsilon))
+        delta_x_t.name = "delta_x_t_" + param.name
+
+        # This part seems to be necessary for only RNNs
+        # For feedforward networks this does not seem to be important.
+        if self.delta_clip:
+            logger.info("Clipping will be applied on the adaptive step size.")
+            delta_x_t = delta_x_t.clip(-self.delta_clip, self.delta_clip)
+            if self.use_adagrad:
+                delta_x_t = delta_x_t * corrected_grad / rms_g_t
+            else:
+                logger.info("Clipped adagrad is disabled.")
+                delta_x_t = delta_x_t * corrected_grad
+        else:
+            logger.info(
+                "Clipping will not be applied on the adaptive step size.")
+            if self.use_adagrad:
+                delta_x_t = delta_x_t * corrected_grad / rms_g_t
+            else:
+                logger.info("Clipped adagrad will not be used.")
+                delta_x_t = delta_x_t * corrected_grad
+
+        new_taus_t = (1 - tensor.sqr(mdx) / (msdx + eps)) * taus_x_t + \
+            shared_floatx(1 + eps, "stabilized")
+
+        # To compute the E[\Delta^2]_t
+        new_mean_square_dx = (
+             msdx * (1 - 1 / taus_x_t) +
+             (tensor.sqr(delta_x_t) / taus_x_t)
+         )
+
+        # To compute the E[\Delta]_t
+        new_mean_dx = (
+            mdx * (1 - 1 / taus_x_t) +
+            (delta_x_t / (taus_x_t))
+        )
+
+        # Perform the outlier detection:
+        # This outlier detection is slightly different:
+        new_taus_t = tensor.switch(
+            tensor.or_(
+                abs(norm_grad - mg) > (2 * tensor.sqrt(mgsq - mg**2)),
+                abs(cur_curvature - nc_ave) > (2 * tensor.sqrt(nc_sq_ave -
+                                                               nc_ave**2))),
+            tensor.switch(
+                new_taus_t > 2.5,
+                shared_floatx(2.5),
+                new_taus_t + shared_floatx(1.0) + eps), new_taus_t)
+
+        # Apply the bound constraints on tau:
+        new_taus_t = tensor.maximum(self.lower_bound_tau, new_taus_t)
+        new_taus_t = tensor.minimum(self.upper_bound_tau, new_taus_t)
+
+        new_cov_num_t = (
+            cov_num_t * (1 - 1 / taus_x_t) +
+            (delta_x_t * cur_curvature) * (1 / taus_x_t)
+        )
+
+        update_step = delta_x_t
+
+        tot_norm_up += update_step.norm(2)
+        tot_param_norm += param.norm(2)
+
+        # Apply updates
+        updates[mean_square_grad] = new_mean_squared_grad
+        updates[mean_square_dx] = new_mean_square_dx
+        updates[mean_dx] = new_mean_dx
+        updates[gnorm_sqr] = new_gnorm_sqr
+        updates[gamma_nume_sqr] = new_gamma_nume_sqr
+        updates[gamma_deno_sqr] = new_gamma_deno_sqr
+        updates[taus_x_t] = new_taus_t
+        updates[cov_num_t] = new_cov_num_t
+        updates[mean_grad] = new_mean_grad
+        updates[old_plain_grad] = norm_grad
+        updates[mean_curvature] = new_curvature_ave
+        updates[mean_curvature_sqr] = new_curvature_sqr_ave
+        updates[step] = step + 1
+
+        if self.use_adagrad:
+            updates[sum_square_grad] = new_sum_squared_grad
+
+        if self.use_corrected_grad:
+            updates[old_grad] = corrected_grad
+
+        # TODO: why are you returning these two? for monitoring? If so i can
+        # add relevant mechanism to monitor them, actually they are already
+        # computed implicity by blocks, what u say?
+        # tot_norm_up, tot_param_norm
+        return update_step, updates
