@@ -224,6 +224,8 @@ class GenericSequenceAttention(AbstractAttention):
             as `energies`.
 
         """
+        # stabilize softmax first
+        energies = energies - energies.max(axis=0)
         unnormalized_weights = tensor.exp(energies)
         if attended_mask:
             unnormalized_weights *= attended_mask
