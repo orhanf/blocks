@@ -665,7 +665,8 @@ class SoftmaxEmitter(AbstractEmitter, Initializable, Random):
     def probs(self, readouts):
         shape = readouts.shape
         return tensor.nnet.softmax(readouts.reshape(
-            (tensor.prod(shape[:-1]), shape[-1]))).reshape(shape)
+            (tensor.prod(shape[:-1]), shape[-1]))).reshape(shape).clip(1e-6,
+                                                                       1-1e-6)
 
     @application
     def emit(self, readouts):
@@ -680,7 +681,7 @@ class SoftmaxEmitter(AbstractEmitter, Initializable, Random):
         # WARNING: unfortunately this application method works
         # just fine when `readouts` and `outputs` have
         # different dimensions. Be careful!
-        probs = self.probs(readouts)
+        probs = self.probs(readouts).clip(1e-6, 1-1e-6)
         max_output = probs.shape[-1]
         flat_outputs = outputs.flatten()
         num_outputs = flat_outputs.shape[0]
