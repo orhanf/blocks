@@ -878,6 +878,8 @@ class Adasecant(StepRule):
         self.upper_bound_tau = 1e7
         self.lower_bound_tau = 1.5
 
+        self.corrected_grads = OrderedDict()
+
     def compute_step(self, param, previous_step):
 
         grad = previous_step
@@ -1038,6 +1040,7 @@ class Adasecant(StepRule):
                 (1 - cond) * norm_grad
         else:
             corrected_grad = norm_grad
+        self.corrected_grads[param] = corrected_grad
 
         if self.use_adagrad:
             g = corrected_grad
