@@ -421,7 +421,7 @@ class ShallowEnergyComputer(Sequence, Initializable, Feedforward):
     @lazy()
     def __init__(self, **kwargs):
         super(ShallowEnergyComputer, self).__init__(
-            [Tanh().apply, Linear(use_bias=True).apply], **kwargs)
+            [Tanh().apply, Linear(use_bias=False).apply], **kwargs)
 
     @property
     def input_dim(self):
@@ -551,7 +551,7 @@ class AttentionRecurrent(AbstractAttentionRecurrent, Initializable):
                              if 'mask' not in name]
             distribute = Distribute(normal_inputs,
                                     attention.take_glimpses.outputs[0],
-                                    prototype=Linear(use_bias=True))
+                                    prototype=Linear(use_bias=False))
 
         self.transition = transition
         self.attention = attention
