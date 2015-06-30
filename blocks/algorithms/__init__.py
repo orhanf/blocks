@@ -60,7 +60,7 @@ class DifferentiableCostMinimizer(TrainingAlgorithm):
     ----------
     cost : :class:`~tensor.TensorVariable`
         The objective to be minimized.
-    params : list of :class:`~tensor.TensorSharedVariable`
+    parameters : list of :class:`~tensor.TensorSharedVariable`
         The parameters to be tuned.
 
     Attributes
@@ -70,7 +70,7 @@ class DifferentiableCostMinimizer(TrainingAlgorithm):
         updates are done using the old values of optimized parameters.
     cost : :class:`~tensor.TensorVariable`
         The objective to be minimized.
-    params : list of :class:`~tensor.TensorSharedVariable`
+    parameters : list of :class:`~tensor.TensorSharedVariable`
         The parameters to be tuned.
 
     Notes
@@ -90,9 +90,9 @@ class DifferentiableCostMinimizer(TrainingAlgorithm):
        currently.
 
     """
-    def __init__(self, cost, params):
+    def __init__(self, cost, parameters):
         self.cost = cost
-        self.params = params
+        self.parameters = parameters
         self._cost_computation_graph = ComputationGraph(self.cost)
         self._updates = []
 
@@ -151,9 +151,10 @@ class GradientDescent(DifferentiableCostMinimizer):
     .. code-block::  python
 
         for batch in data:
-            steps = step_rule.compute_steps(params, gradients_wr_params)
-            for param in params:
-                param -= steps[param]
+            steps = step_rule.compute_steps(parameters,
+                                            gradients_wr_parameters)
+            for parameter in parameters:
+                parameter -= steps[parameter]
 
     Note, that the step is *subtracted, not added*! This is done in order
     to make step rule chaining possible.
@@ -177,6 +178,10 @@ class GradientDescent(DifferentiableCostMinimizer):
         sub-expressions and would like Theano to use that information
         to compute parameter gradients. Only makes sense when `gradients`
         is `None`.
+    consider_constant : list, optional
+        A passthrough to `theano.tensor.grad`'s `consider_constant`
+        argument.  A list of expressions through which gradients will not
+        be backpropagated. Only makes sense when `gradients` is `None`.
 
     Attributes
     ----------
@@ -187,22 +192,27 @@ class GradientDescent(DifferentiableCostMinimizer):
 
     """
     def __init__(self, step_rule=None, gradients=None, known_grads=None,
-                 **kwargs):
+                 consider_constant=None, **kwargs):
         if gradients:
-            kwargs.setdefault("params", gradients.keys())
+            kwargs.setdefault("parameters", gradients.keys())
         super(GradientDescent, self).__init__(**kwargs)
 
         self.gradients = gradients
         if not self.gradients:
             logger.info("Taking the cost gradient")
             self.gradients = dict(
-                equizip(self.params, tensor.grad(self.cost, self.params,
-                                                 known_grads=known_grads)))
+                equizip(self.parameters, tensor.grad(
+                    self.cost, self.parameters,
+                    known_grads=known_grads,
+                    consider_constant=consider_constant)))
             logger.info("The cost gradient computation graph is built")
         else:
             if known_grads:
                 raise ValueError("known_grads has no effect when gradients "
                                  "are passed in")
+            if consider_constant is not None:
+                raise ValueError("consider_constant has no effect when "
+                                 "gradients are passed in")
         self.step_rule = step_rule if step_rule else Scale()
 
         self.total_gradient_norm = named_copy(l2_norm(self.gradients.values()),
@@ -218,8 +228,8 @@ class GradientDescent(DifferentiableCostMinimizer):
         # Note: the gradients are computed in the same order in which
         # the parameters were given. Keep it like that to ensure
         # reproducibility.
-        for param in self.params:
-            all_updates.append((param, param - self.steps[param]))
+        for parameter in self.parameters:
+            all_updates.append((parameter, parameter - self.steps[parameter]))
         all_updates += self.step_rule_updates
         self._function = theano.function(self.inputs, [], updates=all_updates)
         logger.info("The training algorithm is initialized")
@@ -237,7 +247,7 @@ class GradientDescent(DifferentiableCostMinimizer):
 @add_metaclass(ABCMeta)
 class StepRule(object):
     """A rule to compute steps for a gradient descent algorithm."""
-    def compute_step(self, param, previous_step):
+    def compute_step(self, parameter, previous_step):
         """Build a Theano expression for the step for a parameter.
 
         This method is called by default implementation of
@@ -245,7 +255,7 @@ class StepRule(object):
 
         Parameters
         ----------
-        param : :class:`~tensor.TensorSharedVariable`
+        parameter : :class:`~tensor.TensorSharedVariable`
             The parameter.
         previous_step : :class:`~tensor.TensorVariable`
             Some quantity related to the gradient of the cost with respect
@@ -290,10 +300,11 @@ class StepRule(object):
             A list of tuples representing updates to be performed.
 
         """
-        parameter_wise = [self.compute_step(param, previous_steps[param])
-                          for param in previous_steps]
+        parameter_wise = [self.compute_step(parameter,
+                                            previous_steps[parameter])
+                          for parameter in previous_steps]
         steps, updates = equizip(*parameter_wise)
-        steps = OrderedDict((param, step) for param, step
+        steps = OrderedDict((parameter, step) for parameter, step
                             in equizip(previous_steps.keys(), steps))
         updates = list(itertools.chain(*updates))
         return steps, updates
@@ -342,7 +353,7 @@ class Scale(StepRule):
     def __init__(self, learning_rate=1.0):
         self.learning_rate = shared_floatx(learning_rate)
 
-    def compute_step(self, param, previous_step):
+    def compute_step(self, parameter, previous_step):
         return self.learning_rate * previous_step, []
 
 
@@ -364,8 +375,8 @@ class BasicMomentum(StepRule):
     def __init__(self, momentum=0.):
         self.momentum = shared_floatx(momentum)
 
-    def compute_step(self, param, previous_step):
-        velocity = shared_floatx(param.get_value() * 0.)
+    def compute_step(self, parameter, previous_step):
+        velocity = shared_floatx(parameter.get_value() * 0.)
         step = self.momentum * velocity + previous_step
         updates = [(velocity, step)]
         return step, updates
@@ -410,9 +421,9 @@ class AdaDelta(StepRule):
     Parameters
     ----------
     decay_rate : float, optional
-        Decay rate in [0, 1]. Defaults to 0.
+        Decay rate in [0, 1]. Defaults to 0.95.
     epsilon : float, optional
-        Stabilizing constant for RMS. Defaults to 1e-7.
+        Stabilizing constant for RMS. Defaults to 1e-6.
 
     Notes
     -----
@@ -422,15 +433,15 @@ class AdaDelta(StepRule):
        Rate Method*, arXiv:1212.5701.
 
     """
-    def __init__(self, decay_rate=0., epsilon=1e-7):
+    def __init__(self, decay_rate=0.95, epsilon=1e-6):
         if not 0.0 <= decay_rate <= 1.0:
             raise ValueError("decay rate needs to be in [0, 1]")
         self.decay_rate = shared_floatx(decay_rate)
         self.epsilon = shared_floatx(epsilon)
 
-    def compute_step(self, param, previous_step):
-        mean_square_step_tm1 = shared_floatx(param.get_value() * 0.)
-        mean_square_delta_x_tm1 = shared_floatx(param.get_value() * 0.)
+    def compute_step(self, parameter, previous_step):
+        mean_square_step_tm1 = shared_floatx(parameter.get_value() * 0.)
+        mean_square_delta_x_tm1 = shared_floatx(parameter.get_value() * 0.)
 
         mean_square_step_t = (
             self.decay_rate * mean_square_step_tm1 +
@@ -486,8 +497,8 @@ class BasicRMSProp(StepRule):
         self.decay_rate = shared_floatx(decay_rate)
         self.epsilon = 1. / max_scaling
 
-    def compute_step(self, param, previous_step):
-        mean_square_step_tm1 = shared_floatx(param.get_value() * 0.)
+    def compute_step(self, parameter, previous_step):
+        mean_square_step_tm1 = shared_floatx(parameter.get_value() * 0.)
         mean_square_step_t = (
             self.decay_rate * mean_square_step_tm1 +
             (1 - self.decay_rate) * tensor.sqr(previous_step))
@@ -570,8 +581,8 @@ class StepClipping(StepRule):
         multiplier = tensor.switch(norm < self.threshold,
                                    1, self.threshold / norm)
         steps = OrderedDict(
-            (param, step * multiplier)
-            for param, step in previous_steps.items())
+            (parameter, step * multiplier)
+            for parameter, step in previous_steps.items())
         return steps, []
 
 
@@ -599,9 +610,9 @@ class VariableClipping(StepRule):
     -----
     Because of the way the :class:`StepRule` API works, this particular
     rule implements norm clipping of the value *after* update in the
-    following way: it computes ``param - previous_step``, scales it
+    following way: it computes ``parameter - previous_step``, scales it
     to have (possibly axes-wise) norm(s) of at most `threshold`,
-    then subtracts *that* value from `param` to yield an 'equivalent
+    then subtracts *that* value from `parameter` to yield an 'equivalent
     step' that respects the desired norm constraints. This procedure
     implicitly assumes one is doing simple (stochastic) gradient descent,
     and so steps computed by this step rule may not make sense for use
@@ -629,24 +640,68 @@ class VariableClipping(StepRule):
         if len(axis) != len(self.axis):
             raise ValueError("axis must be unique")
 
-    def compute_step(self, param, previous_step):
+    def compute_step(self, parameter, previous_step):
         if any(ax >= previous_step.ndim for ax in self.axis):
             raise ValueError("Invalid axis {} for {}, ndim={}".format(
-                self.axis, param, previous_step.ndim))
+                self.axis, parameter, previous_step.ndim))
         if len(self.axis) == 0:
-            norms = l2_norm([param - previous_step])
+            norms = l2_norm([parameter - previous_step])
         else:
-            squares = tensor.sqr(param - previous_step)
+            squares = tensor.sqr(parameter - previous_step)
             norms = tensor.sqrt(
                 reduce(lambda t, a: t.sum(axis=a, keepdims=True),
                        sorted(self.axis), squares))
-        # We want a step s* that is the same as scaling (param - previous_step)
-        # by threshold / norm when threshold < norm.
-        shrinking_step = (param -
-                          (self.threshold / norms) * (param - previous_step))
+        # We want a step s* that is the same as scaling
+        # (parameter - previous_step) by threshold / norm
+        # when threshold < norm.
+        shrinking_step = (parameter -
+                          (self.threshold / norms) *
+                          (parameter - previous_step))
         return tensor.switch(norms > self.threshold,
                              shrinking_step,
                              previous_step), ()
+
+
+class AdaGrad(StepRule):
+    """Implements the AdaGrad learning rule.
+
+    Parameters
+    ----------
+    learning_rate : float, optional
+        Step size.
+        Default value is set to 0.0002.
+    epsilon : float, optional
+        Stabilizing constant for one over root of sum of squares.
+        Defaults to 1e-6.
+
+    Notes
+    -----
+    For more information, see [ADAGRAD]_.
+
+    .. [ADADGRAD] Duchi J, Hazan E, Singer Y.,
+       *Adaptive subgradient methods for online learning and
+        stochastic optimization*,
+       http://www.jmlr.org/papers/volume12/duchi11a/duchi11a.pdf
+
+    """
+    def __init__(self, learning_rate=0.002, epsilon=1e-6):
+        self.learning_rate = learning_rate
+        self.epsilon = epsilon
+
+    def compute_step(self, parameter, previous_step):
+        name = 'adagrad_sqs'
+        if parameter.name:
+            name += '_' + parameter.name
+        ssq = shared_floatx(parameter.get_value() * 0.,
+                            name=name)
+
+        ssq_t = (tensor.sqr(previous_step) + ssq)
+        step = (self.learning_rate * previous_step /
+                (tensor.sqrt(ssq_t) + self.epsilon))
+
+        updates = [(ssq, ssq_t)]
+
+        return step, updates
 
 
 class Adam(StepRule):
@@ -661,16 +716,16 @@ class Adam(StepRule):
     learning_rate : float, optional
         Step size.
         Default value is set to 0.0002.
-    beta_1 : float, optional
+    beta1 : float, optional
         Exponential decay rate for the first moment estimates.
         Default value is set to 0.1.
-    beta_2 : float, optional
+    beta2 : float, optional
         Exponential decay rate for the second moment estimates.
         Default value is set to 0.001.
     epsilon : float, optional
         Default value is set to 1e-8.
     decay_factor : float, optional
-        Default value is set to 1e-8.
+        Default value is set to 1 - 1e-8.
 
     """
     def __init__(self, learning_rate=0.002,
@@ -682,9 +737,9 @@ class Adam(StepRule):
         self.epsilon = epsilon
         self.decay_factor = decay_factor
 
-    def compute_step(self, param, previous_step):
-        mean = shared_floatx(param.get_value() * 0., 'mean')
-        variance = shared_floatx(param.get_value() * 0., 'variance')
+    def compute_step(self, parameter, previous_step):
+        mean = shared_floatx(parameter.get_value() * 0., 'mean')
+        variance = shared_floatx(parameter.get_value() * 0., 'variance')
         time = shared_floatx(0., 'time')
 
         t1 = time + 1
@@ -710,16 +765,19 @@ class RemoveNotFinite(StepRule):
 
     Replaces a step (the parameter update of a single shared variable)
     which contains non-finite elements (such as ``inf`` or ``NaN``) with a
-    scaled version of the parameters being updated instead.
+    step rescaling the parameters.
 
     Parameters
     ----------
     scaler : float, optional
         The scaling applied to the parameter in case the step contains
-        non-finite elements. Defaults to 0.1.
+        non-finite elements. Defaults to 1, which means that parameters
+        will not be changed.
 
     Notes
     -----
+    This rule should be applied last!
+
     This trick was originally used in the GroundHog_ framework.
 
     .. _GroundHog: https://github.com/lisa-groundhog/GroundHog
@@ -728,11 +786,11 @@ class RemoveNotFinite(StepRule):
     def __init__(self, scaler=1):
         self.scaler = scaler
 
-    def compute_step(self, param, previous_step):
+    def compute_step(self, parameter, previous_step):
         not_finite = (tensor.isnan(previous_step).sum() +
                       tensor.isinf(previous_step).sum())
         step = tensor.switch(
-            not_finite > 0, (1 - self.scaler) * param, previous_step)
+            not_finite > 0, (1 - self.scaler) * parameter, previous_step)
         return step, []
 
 
@@ -761,8 +819,8 @@ class Restrict(StepRule):
     def compute_steps(self, previous_steps):
         filtered_previous_steps = dict_subset(previous_steps, self.variables)
         steps, updates = self.step_rule.compute_steps(filtered_previous_steps)
-        actual = OrderedDict((param, steps[param])
-                             if param in steps
-                             else (param, previous_steps[param])
-                             for param in previous_steps)
+        actual = OrderedDict((parameter, steps[parameter])
+                             if parameter in steps
+                             else (parameter, previous_steps[parameter])
+                             for parameter in previous_steps)
         return actual, updates

@@ -8,7 +8,7 @@ from theano import tensor
 from blocks.algorithms import (GradientDescent, StepClipping, VariableClipping,
                                CompositeRule, Scale, StepRule, BasicMomentum,
                                Momentum, AdaDelta, BasicRMSProp, RMSProp, Adam,
-                               RemoveNotFinite, Restrict)
+                               AdaGrad, RemoveNotFinite, Restrict)
 from blocks.utils import shared_floatx
 
 
@@ -17,7 +17,7 @@ def test_gradient_descent():
     W_start_value = W.get_value()
     cost = tensor.sum(W ** 2)
 
-    algorithm = GradientDescent(cost=cost, params=[W])
+    algorithm = GradientDescent(cost=cost, parameters=[W])
     algorithm.step_rule.learning_rate.set_value(0.75)
     algorithm.initialize()
     algorithm.process_batch(dict())
@@ -216,26 +216,45 @@ def test_adam():
 
     rtol = 1e-4
     assert_allclose(f()[0], [0.002, 0.002], rtol=rtol)
-    assert_allclose(f()[0], [0.01052621, 0.01052621], rtol=rtol)
-    assert_allclose(f()[0], [0.00738005, 0.00738005], rtol=rtol)
+    a.set_value([2, 3])
+    assert_allclose(f()[0], [0.0019407, 0.00196515], rtol=rtol)
+    a.set_value([1, 1.5])
+    assert_allclose(f()[0], [0.00178724, 0.0018223], rtol=rtol)
+
+
+def test_adagrad():
+    a = shared_floatx([3, 4])
+    cost = (a ** 2).sum()
+    steps, updates = AdaGrad().compute_steps(
+        OrderedDict([(a, tensor.grad(cost, a))]))
+    f = theano.function([], [steps[a]], updates=updates)
+
+    rtol = 1e-4
+    assert_allclose(f()[0], [0.002,  0.002], rtol=rtol)
+    a.set_value([2, 3])
+    assert_allclose(f()[0], [0.0011094,  0.0012], rtol=rtol)
+    a.set_value([1, 1.5])
+    assert_allclose(f()[0], [0.00053452,  0.0005747], rtol=rtol)
 
 
 def test_remove_not_finite():
-    rule1 = RemoveNotFinite()
-    rule2 = RemoveNotFinite(1.)
+    rule1 = RemoveNotFinite(0.1)
+    rule2 = RemoveNotFinite()
 
-    gradients = {1: shared_floatx(numpy.nan), 2: shared_floatx(numpy.inf)}
+    gradients = {1: shared_floatx(numpy.nan), 2: shared_floatx(numpy.inf),
+                 3: 0.123}
     rval1, _ = rule1.compute_steps(gradients)
-    assert_allclose(rval1[1].eval(), 0.1)
-    assert_allclose(rval1[2].eval(), 0.2)
+    assert_allclose(rval1[1].eval(), 0.9)
+    assert_allclose(rval1[2].eval(), 1.8)
+    assert_allclose(rval1[3].eval(), 0.123)
     rval2, _ = rule2.compute_steps(gradients)
-    assert_allclose(rval2[1].eval(), 1.0)
-    assert_allclose(rval2[2].eval(), 2.0)
+    assert_allclose(rval2[1].eval(), 0.0)
+    assert_allclose(rval2[2].eval(), 0.0)
 
 
 class DummyUpdatesStepRule(StepRule):
-    def compute_step(self, param, previous_step):
-        return previous_step + 2, [(param * 10, param * 100)]
+    def compute_step(self, parameter, previous_step):
+        return previous_step + 2, [(parameter * 10, parameter * 100)]
 
 
 def test_restrict():

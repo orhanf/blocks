@@ -3,8 +3,8 @@ import signal
 import logging
 import traceback
 
-from blocks import config
-from blocks.log import TrainingLog
+from blocks.config import config
+from blocks.log import BACKENDS
 from blocks.utils import reraise_as, unpack, change_recursion_limit
 from blocks.utils.profile import Profile, Timer
 from blocks.algorithms import DifferentiableCostMinimizer
@@ -78,18 +78,21 @@ class MainLoop(object):
         but may be used by extensions.
     log : instance of :class:`.TrainingLog`, optional
         The log. When not given, a :class:`.TrainingLog` is created.
+    log_backend : str
+        The backend to use for the log. Currently `python` and `sqlite` are
+        available. If not given, `config.log_backend` will be used. Ignored
+        if `log` is passed.
     extensions : list of :class:`.TrainingExtension` instances
         The training extensions. Will be called in the same order as given
         here.
-    profile : :class:`.Profile`
-        Keeps track of the times spent in differen segments of the training
-        loop.
 
     """
-    def __init__(self, algorithm, data_stream,
-                 model=None, log=None, extensions=None):
+    def __init__(self, algorithm, data_stream, model=None, log=None,
+                 log_backend=None, extensions=None):
         if log is None:
-            log = TrainingLog()
+            if log_backend is None:
+                log_backend = config.log_backend
+            log = BACKENDS[log_backend]()
         if extensions is None:
             extensions = []
 
@@ -139,15 +142,19 @@ class MainLoop(object):
         # logging, and will it least enable error messages otherwise.
         logging.basicConfig()
 
+        # If this is resumption from a checkpoint, it is crucial to
+        # reset `profile.current`. Otherwise, it simply does not hurt.
+        self.profile.current = []
+
         if self._model and isinstance(self.algorithm,
                                       DifferentiableCostMinimizer):
             # Sanity check: model and algorithm should be configured
             # similarly.
             if not self._model.get_objective() == self.algorithm.cost:
                 logger.warning("different costs for model and algorithm")
-            if not (set(self._model.get_params().values()) ==
-                    set(self.algorithm.params)):
-                logger.warning("different params for model and algorithm")
+            if not (set(self._model.get_parameter_dict().values()) ==
+                    set(self.algorithm.parameters)):
+                logger.warning("different parameters for model and algorithm")
 
         with change_recursion_limit(config.recursion_limit):
             self.original_sigint_handler = signal.signal(
@@ -167,6 +174,7 @@ class MainLoop(object):
                 # called "before_training" could have changed the status
                 # of the main loop.
                 if self.log.status['iterations_done'] > 0:
+                    self.log.resume()
                     self._run_extensions('on_resumption')
                     self.status['epoch_interrupt_received'] = False
                     self.status['batch_interrupt_received'] = False
@@ -177,21 +185,21 @@ class MainLoop(object):
                 self.log.current_row['training_finished'] = True
             except Exception as e:
                 self._restore_signal_handlers()
-                self.log.current_row['got_exception'] = traceback.format_exc(e)
+                self.log.current_row['got_exception'] = traceback.format_exc()
                 logger.error("Error occured during training." + error_message)
                 try:
                     self._run_extensions('on_error')
-                except Exception as inner_e:
-                    logger.error(traceback.format_exc(inner_e))
+                except Exception:
+                    logger.error(traceback.format_exc())
                     logger.error("Error occured when running extensions." +
                                  error_in_error_handling_message)
                 reraise_as(e)
             finally:
+                self._restore_signal_handlers()
                 if self.log.current_row.get('training_finished', False):
                     self._run_extensions('after_training')
                 if config.profile:
                     self.profile.report()
-                self._restore_signal_handlers()
 
     def find_extension(self, name):
         """Find an extension with a given name.
@@ -224,7 +232,8 @@ class MainLoop(object):
                 pass
         self.status['epoch_started'] = False
         self.status['epochs_done'] += 1
-        self.status['_epoch_ends'].append(self.status['iterations_done'])
+        # Log might not allow mutating objects, so use += instead of append
+        self.status['_epoch_ends'] += [self.status['iterations_done']]
         self._run_extensions('after_epoch')
         self._check_finish_training('epoch')
         return True

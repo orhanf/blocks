@@ -1,9 +1,10 @@
 from nose.tools import raises
 
-from blocks.bricks import Bias, Linear, Sigmoid
+from blocks.bricks import Bias, Linear, Logistic
+from blocks.bricks.parallel import Merge
 from blocks.filter import VariableFilter
 from blocks.graph import ComputationGraph
-from blocks.roles import BIAS, FILTER, PARAMETER
+from blocks.roles import BIAS, FILTER, PARAMETER, OUTPUT
 
 from theano import tensor
 
@@ -12,7 +13,7 @@ def test_variable_filter():
     # Creating computation graph
     brick1 = Linear(input_dim=2, output_dim=2, name='linear1')
     brick2 = Bias(2, name='bias1')
-    activation = Sigmoid(name='sigm')
+    activation = Logistic(name='sigm')
 
     x = tensor.vector()
     h1 = brick1.apply(x)
@@ -20,8 +21,8 @@ def test_variable_filter():
     y = brick2.apply(h2)
     cg = ComputationGraph(y)
 
-    parameters = [brick1.W, brick1.b, brick2.params[0]]
-    bias = [brick1.b, brick2.params[0]]
+    parameters = [brick1.W, brick1.b, brick2.parameters[0]]
+    bias = [brick1.b, brick2.parameters[0]]
     brick1_bias = [brick1.b]
 
     # Testing filtering by role
@@ -65,6 +66,20 @@ def test_variable_filter():
     # Testing filtering by application
     appli_filter_list = VariableFilter(applications=[brick1.apply])
     assert variables == appli_filter_list(cg.variables)
+
+    input1 = tensor.matrix('input1')
+    input2 = tensor.matrix('input2')
+    merge = Merge(['input1', 'input2'], [5, 6], 2)
+    merged = merge.apply(input1, input2)
+    merge_cg = ComputationGraph(merged)
+    outputs = VariableFilter(
+        roles=[OUTPUT], bricks=[merge])(merge_cg.variables)
+    assert merged in outputs
+    assert len(outputs) == 3
+
+    outputs_application = VariableFilter(
+        roles=[OUTPUT], applications=[merge.apply])(merge_cg.variables)
+    assert outputs_application == [merged]
 
 
 @raises(TypeError)
