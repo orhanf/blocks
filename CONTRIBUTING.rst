@@ -1,10 +1,14 @@
-Questions about using Blocks?
-=============================
+Making a pull request
+=====================
 
-Please send your questions to the `Blocks users mailing list`_. You might not
-be the first one with this question or problem, so be sure to search both the
-mailing list and the GitHub issues to make sure the answer isn't out there
-already.
+Blocks development occurs in two separate branches: The ``master`` branch is the
+development branch. If you want to contribute a new feature or change the
+behavior of Blocks in any way, please make your pull request to this branch.
+
+The ``stable`` branch contains the latest release of Blocks. If you are fixing a
+bug (that is present in the latest release), make a pull request to this branch.
+If the bug is present in both the ``master`` and ``stable`` branch, two separate
+pull requests are in order.
 
 Want to contribute?
 ===================
@@ -14,7 +18,7 @@ few steps to help you get started:
 
 GitHub crash course
   If you're new to GitHub, be sure to check out our `quick reference`_ to the
-  pull-request worklow, which will show you how to fork Blocks, create a new
+  pull-request workflow, which will show you how to fork Blocks, create a new
   branch, and make a pull-request of your changes.
 
 Writing documentation
@@ -30,6 +34,19 @@ Formatting guidelines
 Code guidelines
   If you're going to write a lot of code, have a read through our `coding
   guidelines`_.
+  
+License
+  Blocks is licensed under the `MIT license`_, with portions licensed under
+  the 3-clause BSD license. By contributing you agree to license your
+  contributions under the MIT license.
+
+Questions about using Blocks?
+=============================
+
+Please send your questions to the `Blocks users mailing list`_. You might not
+be the first one with this question or problem, so be sure to search both the
+mailing list and the GitHub issues to make sure the answer isn't out there
+already.
 
 .. _Blocks users mailing list: https://groups.google.com/forum/#!forum/blocks-users
 .. _quick reference: https://blocks.readthedocs.org/en/latest/development/pull_request.html
@@ -38,3 +55,4 @@ Code guidelines
 .. _PEP 8: https://www.python.org/dev/peps/pep-0008/
 .. _NumPy docstring standard: https://github.com/numpy/numpy/blob/master/doc/HOWTO_DOCUMENT.rst.txt
 .. _reStructuredText: http://docutils.sourceforge.net/docs/user/rst/quickref.html
+.. _MIT license: https://raw.githubusercontent.com/mila-udem/blocks/master/LICENSE

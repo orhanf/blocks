@@ -11,12 +11,10 @@ from blocks.algorithms import GradientDescent, Scale
 from blocks.utils import shared_floatx, named_copy
 from blocks.main_loop import MainLoop
 
-floatX = theano.config.floatX
-
 
 def test_training_data_monitoring():
-    weights = numpy.array([-1, 1], dtype=floatX)
-    features = [numpy.array(f, dtype=floatX)
+    weights = numpy.array([-1, 1], dtype=theano.config.floatX)
+    features = [numpy.array(f, dtype=theano.config.floatX)
                 for f in [[1, 2], [3, 4], [5, 6]]]
     targets = [(weights * f).sum() for f in features]
     n_batches = 3
@@ -39,7 +37,7 @@ def test_training_data_monitoring():
 
     main_loop = MainLoop(
         model=None, data_stream=dataset.get_example_stream(),
-        algorithm=GradientDescent(cost=cost, params=[W],
+        algorithm=GradientDescent(cost=cost, parameters=[W],
                                   step_rule=Scale(0.001)),
         extensions=[
             FinishAfter(after_n_epochs=1),

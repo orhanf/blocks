@@ -310,6 +310,7 @@ class BeamSearch(object):
             states['weights'] = curr_weights
             states['weighted_averages'] = curr_weighted_avgs
             '''
+
             # Rearrange everything
             for name in states:
                 states[name] = states[name][indexes]
