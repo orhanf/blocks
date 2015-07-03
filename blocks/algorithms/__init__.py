@@ -854,7 +854,8 @@ class Adasecant(StepRule):
                  slow_decay=0.995,
                  use_adagrad=False,
                  skip_nan_inf=False,
-                 use_corrected_grad=True):
+                 use_corrected_grad=True,
+                 compute_but_not_update=False):
 
         assert decay >= 0.
         assert decay < 1.
@@ -868,6 +869,7 @@ class Adasecant(StepRule):
         self.use_adagrad = use_adagrad
         self.gamma_reg = gamma_reg
         self.damping = 1e-7
+        self.compute_but_not_update = compute_but_not_update
 
         # We have to bound the tau to prevent it to
         # grow to an arbitrarily large number, oftenwise
@@ -879,6 +881,7 @@ class Adasecant(StepRule):
         self.lower_bound_tau = 1.5
 
         self.corrected_grads = OrderedDict()
+        self.corrected_unnormalized_grads = OrderedDict()
 
     def compute_step(self, param, previous_step):
 
@@ -979,7 +982,8 @@ class Adasecant(StepRule):
         gnorm_sqr_o = cond * gnorm + (1 - cond) * gnorm_sqr
         gnorm_sqr_b = gnorm_sqr_o / (1 - fix_decay)
 
-        norm_grad = norm_grad / (tensor.sqrt(gnorm_sqr_b) + eps)
+        g_normalizer = tensor.sqrt(gnorm_sqr_b) + eps
+        norm_grad = norm_grad / g_normalizer
         msdx = cond * norm_grad**2 + (1 - cond) * mean_square_dx
         mdx = cond * norm_grad + (1 - cond) * mean_dx
 
@@ -1041,6 +1045,7 @@ class Adasecant(StepRule):
         else:
             corrected_grad = norm_grad
         self.corrected_grads[param] = corrected_grad
+        self.corrected_unnormalized_grads[param] = corrected_grad * g_normalizer
 
         if self.use_adagrad:
             g = corrected_grad
@@ -1140,7 +1145,10 @@ class Adasecant(StepRule):
             (delta_x_t * cur_curvature) * (1 / taus_x_t)
         )
 
-        update_step = -delta_x_t
+        if self.compute_but_not_update:
+            update_step = 0.0
+        else:
+            update_step = -delta_x_t
 
         # Apply updates
         updates = [
