@@ -882,6 +882,7 @@ class Adasecant(StepRule):
 
         self.corrected_grads = OrderedDict()
         self.corrected_unnormalized_grads = OrderedDict()
+        self.g_normalizer = 0.0
 
     def compute_step(self, param, previous_step):
 
@@ -1046,6 +1047,7 @@ class Adasecant(StepRule):
             corrected_grad = norm_grad
         self.corrected_grads[param] = corrected_grad
         self.corrected_unnormalized_grads[param] = corrected_grad * g_normalizer
+        self.g_normalizer = g_normalizer
 
         if self.use_adagrad:
             g = corrected_grad
