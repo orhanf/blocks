@@ -6,6 +6,10 @@ ensure the codebase is of high quality, we ask all new developers to have a
 quick read through these rules to make sure that any code you contribute will be
 easy to merge!
 
+
+.. image:: /_static/code_quality.png
+   :width: 100%
+
 Formatting guidelines
 ---------------------
 Blocks follows the `PEP8 style guide`_ closely, so please make sure you are
@@ -49,7 +53,7 @@ Blocks:
            self.baz = baz
 
 .. _PEP8 style guide: https://www.python.org/dev/peps/pep-0008/
-.. _Travis CI buildbot: https://travis-ci.org/bartvm/blocks
+.. _Travis CI buildbot: https://travis-ci.org/mila-udem/blocks
 .. _flake8: https://pypi.python.org/pypi/flake8
 .. _pep8: https://pypi.python.org/pypi/pep8
 .. _pyflakes: https://pypi.python.org/pypi/pyflakes
@@ -74,7 +78,7 @@ That is, avoid trivial checks such as
 
 .. code-block:: python
 
-   isinstance(var, six.integer_types)
+   isinstance(var, numbers.Integral)
    isinstance(var, (tuple, list))
 
 in cases where any number (like a float without a fractional part or a NumPy
@@ -224,8 +228,8 @@ The test suite can be executed locally using nose2_ [#]_.
 
 .. [#] For all tests but the doctests, nose_ can also be used.
 
-.. _Travis CI: https://travis-ci.org/bartvm/blocks
-.. _coveralls: https://coveralls.io/r/bartvm/blocks
+.. _Travis CI: https://travis-ci.org/mila-udem/blocks
+.. _coveralls: https://coveralls.io/r/mila-udem/blocks
 .. _nose2: https://readthedocs.org/projects/nose2/
 .. _nose: http://nose.readthedocs.org/en/latest/
 

@@ -11,7 +11,8 @@ Blocks is developed in parallel with Fuel_, a dataset processing framework.
 
 .. warning::
    Blocks is a new project which is still under development. As such, certain
-   (all) parts of the framework are subject to change.
+   (all) parts of the framework are subject to change. The last stable (and
+   thus likely an outdated) version can be found in the ``stable`` branch.
 
 .. tip::
 
@@ -20,8 +21,8 @@ Blocks is developed in parallel with Fuel_, a dataset processing framework.
    to file bug reports and feature requests by `making a GitHub issue`_.
 
 .. _mailing list: https://groups.google.com/forum/#!forum/blocks-users
-.. _making a GitHub issue: https://github.com/bartvm/blocks/issues/new
-.. _Fuel: https://github.com/bartvm/fuel
+.. _making a GitHub issue: https://github.com/mila-udem/blocks/issues/new
+.. _Fuel: https://github.com/mila-udem/fuel
 
 .. _tutorials:
 
@@ -63,6 +64,7 @@ Quickstart
    >>> from blocks.graph import ComputationGraph
    >>> from blocks.initialization import IsotropicGaussian, Constant
    >>> from fuel.streams import DataStream
+   >>> from fuel.transformers import Flatten
    >>> from fuel.datasets import MNIST
    >>> from fuel.schemes import SequentialScheme
    >>> from blocks.extensions import FinishAfter, Printing
@@ -85,14 +87,18 @@ Calculate your loss function.
 
 Load your training data using Fuel.
 
->>> mnist_train = MNIST("train")
->>> train_stream = DataStream(
-...     dataset=mnist_train,
-...     iteration_scheme=SequentialScheme(mnist_train.num_examples, 128))
->>> mnist_test = MNIST("test")
->>> test_stream = DataStream(
-...     dataset=mnist_test,
-...     iteration_scheme=SequentialScheme(mnist_test.num_examples, 1024))
+>>> mnist_train = MNIST(("train",))
+>>> train_stream = Flatten(
+...     DataStream.default_stream(
+...         dataset=mnist_train,
+...         iteration_scheme=SequentialScheme(mnist_train.num_examples, 128)),
+...     which_sources=('features',))
+>>> mnist_test = MNIST(("test",))
+>>> test_stream = Flatten(
+...     DataStream.default_stream(
+...         dataset=mnist_test,
+...         iteration_scheme=SequentialScheme(mnist_test.num_examples, 1024)),
+...     which_sources=('features',))
 
 And train!
 
@@ -100,7 +106,7 @@ And train!
 >>> main_loop = MainLoop(
 ...     model=Model(cost), data_stream=train_stream,
 ...     algorithm=GradientDescent(
-...         cost=cost, params=ComputationGraph(cost).parameters,
+...         cost=cost, parameters=ComputationGraph(cost).parameters,
 ...         step_rule=Scale(learning_rate=0.1)),
 ...     extensions=[FinishAfter(after_n_epochs=5),
 ...                 DataStreamMonitoring(
@@ -129,20 +135,20 @@ In the future we also hope to support:
 
 * Dimension, type and axes-checking
 
-.. image:: https://img.shields.io/coveralls/bartvm/blocks.svg
-   :target: https://coveralls.io/r/bartvm/blocks
+.. image:: https://img.shields.io/coveralls/mila-udem/blocks.svg
+   :target: https://coveralls.io/r/mila-udem/blocks
 
-.. image:: https://travis-ci.org/bartvm/blocks.svg?branch=master
-   :target: https://travis-ci.org/bartvm/blocks
+.. image:: https://travis-ci.org/mila-udem/blocks.svg?branch=master
+   :target: https://travis-ci.org/mila-udem/blocks
 
 .. image:: https://readthedocs.org/projects/blocks/badge/?version=latest
    :target: https://blocks.readthedocs.org/
 
-.. image:: https://img.shields.io/scrutinizer/g/bartvm/blocks.svg
-   :target: https://scrutinizer-ci.com/g/bartvm/blocks/
+.. image:: https://img.shields.io/scrutinizer/g/mila-udem/blocks.svg
+   :target: https://scrutinizer-ci.com/g/mila-udem/blocks/
 
 .. image:: https://img.shields.io/badge/license-MIT-blue.svg
-   :target: https://github.com/bartvm/blocks/blob/master/LICENSE
+   :target: https://github.com/mila-udem/blocks/blob/master/LICENSE
 
 |
 

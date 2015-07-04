@@ -1,17 +1,26 @@
 sudo: false
 cache:
   directories:
-    - $TRAVIS_BUILD_DIR/mnist
+    - $TRAVIS_BUILD_DIR/data
 branches:
   only:
     - master
+    - stable
 language: python
-python:
-  - "2.7"
-  - "3.4"
-env:
-  - TESTS=float32
-  - TESTS=float64
+matrix:
+  include:
+    - python: 2.7
+      env: TESTS=blocks FLOATX=float32
+    - python: 2.7
+      env: TESTS=blocks FLOATX=float32 DB=sqlite
+    - python: 3.4
+      env: TESTS=blocks FLOATX=float64
+    - python: 2.7
+      env: TESTS=blocks-examples FLOATX=float32
+    - python: 2.7
+      env: TESTS=blocks-examples FLOATX=float32 DB=sqlite
+    - python: 3.4
+      env: TESTS=blocks-examples FLOATX=float64
 before_install:
   - # Setup Python environment with BLAS libraries
   - wget -q http://repo.continuum.io/miniconda/Miniconda-latest-Linux-x86_64.sh -O miniconda.sh
@@ -19,33 +28,37 @@ before_install:
   - ./miniconda.sh -b
   - export PATH=$HOME/miniconda/bin:$PATH
   - conda update -q --yes conda
-  - |
-      # Download MNIST for tests if not loaded from cache
-      if find mnist -empty | read; then
-        mkdir mnist
-        cd mnist
-        curl -O http://yann.lecun.com/exdb/mnist/train-images-idx3-ubyte.gz \
-             -O http://yann.lecun.com/exdb/mnist/train-labels-idx1-ubyte.gz \
-             -O http://yann.lecun.com/exdb/mnist/t10k-images-idx3-ubyte.gz \
-             -O http://yann.lecun.com/exdb/mnist/t10k-labels-idx1-ubyte.gz
-        gunzip *-ubyte.gz
-        cd -
-      fi
-  - export FUEL_DATA_PATH=$PWD
+  - export FUEL_DATA_PATH=$TRAVIS_BUILD_DIR/data
 install:
   # Install all Python dependencies
   - conda install -q --yes python=$TRAVIS_PYTHON_VERSION mkl --file req-travis-conda.txt
   - pip install -q -r req-travis-pip.txt
 script:
-  - pip install . -r requirements.txt # Tests setup.py
+  - pip install -e . -r requirements.txt # Tests setup.py
+  - curl https://raw.githubusercontent.com/mila-udem/fuel/master/.travis-data.sh | bash -s -- mnist
   - # Must export environment variable so that the subprocess is aware of it
-  - export THEANO_FLAGS=floatX=$TESTS,optimizer=fast_compile
-  - export FUEL_FLOATX=$TESTS
-  - export BLOCKS_PROFILE=true
+  - export THEANO_FLAGS=floatX=$FLOATX,optimizer=fast_compile
+  - export FUEL_FLOATX=$FLOATX
+  - "if [[ $DB == 'sqlite' ]]; then echo 'log_backend: sqlite' > ~/.blocksrc; fi"
   - # Running nose2 within coverage makes imports count towards coverage
-  - bokeh-server &> /dev/null &
-  - coverage run -p --source=blocks -m nose2.__main__ -v doctests
-  - coverage run -p --source=blocks -m nose2.__main__ -v tests
+  - function fail { export FAILED=1; }
+  - |
+      if [[ $TESTS == 'blocks' ]]; then
+        coverage run -p --source=blocks -m nose2.__main__ -v doctests || fail
+        export THEANO_FLAGS=$THEANO_FLAGS,cxx=
+        coverage run -p --source=blocks -m nose2.__main__ -v tests || fail
+        return $FAILED
+      fi
+  - |
+      if [[ $TESTS == 'blocks-examples' ]]; then
+        cd $TRAVIS_BUILD_DIR
+        git clone https://github.com/mila-udem/blocks-examples.git
+        cd blocks-examples
+        nose2 tests
+      fi
 after_script:
-  - coverage combine
-  - coveralls
+  - |
+      if [[ $TESTS == 'blocks' ]]; then
+        coverage combine
+        coveralls
+      fi
